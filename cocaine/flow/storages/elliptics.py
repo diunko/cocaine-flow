@@ -46,7 +46,8 @@ class Elliptics(Storage):
             self.read(self.key('users', username))
             raise UserExists
         except RuntimeError:
-            self.write(self.key('users', username), {'password': hashed_password, 'admin': admin, 'token': token})
+            self.write(self.key('users', username), {'password': hashed_password, 'admin': admin, 'token': token,
+                                                     'username': username})
             self.write(self.key('tokens', token), username)
 
     def remove_prefix(self, prefix, key):

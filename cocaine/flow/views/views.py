@@ -193,6 +193,8 @@ def validate_info(info):
     package_type = info.get('type')
     if package_type not in ['python','nodejs']:
         raise ValueError('%s type is not supported' % package_type)
+    if package_type == 'nodejs':
+        info['slave'] = '/usr/lib/cocaine-worker-nodejs/worker.js'
 
     app_name = info.get('name')
     if app_name is None:
@@ -255,7 +257,8 @@ def upload_repo(token):
     s = storage
 
     user = s.find_user_by_token(token)
-    logger.error("user %s uploading repo",user["username"])
+    #logger.error("user %s uploading repo",user["username"])
+    #print json.dumps(user)
     username = user["username"]
 
     if not url:
@@ -299,7 +302,10 @@ def upload_repo(token):
             return str(e), 400
 
         try:
-            depends_path = download_depends(package_info['depends'], package_info['type'], clone_path)
+            if package_info["type"] == "nodejs":
+                depends_path = download_depends({}, package_info['type'], clone_path)
+            else:
+                depends_path = download_depends(package_info['depends'], package_info['type'], clone_path)
         except sh.ErrorReturnCode as e:
             return 'Unable to install dependencies. %s' % e, 503
 
@@ -377,7 +383,7 @@ def upload(user):
     return 'Application %s was successfully uploaded' % uuid
 
 
-@token_required(admin=True)
+@token_required
 def deploy(runlist, uuid, profile, user):
     import itertools
     s = storage
@@ -388,6 +394,9 @@ def deploy(runlist, uuid, profile, user):
     manifest = s.read_manifest(uuid)
     if manifest is None:
         return 'Manifest for app %s doesn\'t exists' % uuid, 400
+    
+    if not user["admin"] and user["token"] != manifest["developer"]:
+        return 'Not allowed',503
 
     # read runlists
     runlist_dict = s.read_runlist(runlist, {})

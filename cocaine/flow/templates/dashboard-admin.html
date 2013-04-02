@@ -25,7 +25,6 @@
                                 <dt>
                                     <h4> {{ manifest.uuid }}
 
-                                    {% if user.admin %}
                                         <span class="pull-right">
                                             <button type="button" class="btn btn-mini deploy"
                                                     data-uuid="{{ manifest.uuid }}">
@@ -36,7 +35,6 @@
                                                 data-id="{{ manifest.uuid }}">Remove
                                         </button>
                                     </span>
-                                    {% endif %}
                                     </h4>
 
                                 </dt>
@@ -428,7 +426,6 @@
 </div>
 <!-- END -->
 
-{% if user.admin %}
     {% block js %}
         <script type="text/javascript" src="{{ url_for('static', filename='bootbox.min.js') }}"></script>
         <script src="http://ajax.googleapis.com/ajax/libs/dojo/1.7.0/dojo/dojo.js"
@@ -862,4 +859,3 @@
 
         </script>
     {% endblock %}
-{% endif %}
