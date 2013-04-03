@@ -15,7 +15,7 @@ from common import send_json_rpc, token_required, token_required_json, uniform, 
 from .profile import PROFILE_OPTION_VALIDATORS
 from storages.exceptions import UserExists
 import admin
-
+import json
 
 logger = logging.getLogger()
 
@@ -233,6 +233,8 @@ def upload_app(app, info, ref, token):
 
     return info['uuid']
 
+def match_nodejs_version(expr,ver):
+    return "0.8.21"
 
 def download_depends(depends, type_, path):
     logger.debug('Downloading dependencies for %s', path)
@@ -247,6 +249,81 @@ def download_depends(depends, type_, path):
         sh.mkdir("-p",install_path)
         sh.npm("install","--production",_cwd=path)
         return os.listdir(install_path)
+
+def download_nodejs_depends(path, env):
+    logger.debug('Downloading dependencies for %s', path)
+    install_path = "%s/node_modules"%path 
+    sh.mkdir("-p",install_path)
+    npm = sh.Command(env.npm)
+    npm("install","--production",_cwd=path)
+    return os.listdir(install_path)
+
+def get_nodejs_env(version):
+    prefix = current_app.config["NODEJS_PREFIX"]
+    env = {
+        "npm":"%s/node-%s/bin/npm"%(prefix,version),
+        "node":"%s/node-%s/bin/node"%(prefix,version),
+        "worker":"%s/node-%s/bin/cocaine-worker"%(prefix,version)}
+    return env
+
+def validate_nodejs_package(package):
+    pass
+
+def pack_python_app(package_info,clone_path):
+    try:
+        depends_path = download_depends(package_info['depends'], package_info['type'], clone_path)
+    except sh.ErrorReturnCode as e:
+        return 'Unable to install dependencies. %s' % e, 503
+
+    # remove info.yaml from tar.gz
+    with open(clone_path + '/.gitattributes', 'w') as f:
+        f.write('info.yaml export-ignore')
+
+    try:
+        logger.debug("Packing application to tar.gz")
+        sh.git("archive", ref, "--worktree-attributes", format="tar", o="app.tar", _cwd=clone_path),
+        sh.tar("-uf", "app.tar", "-C", clone_path + "/depends", *depends_path, _cwd=clone_path)
+        sh.gzip("app.tar", _cwd=clone_path)
+        package_files = sh.tar('-tf', 'app.tar.gz', _cwd=clone_path)
+        package_info['structure'] = [f.strip() for f in package_files]
+    except sh.ErrorReturnCode as e:
+        return 'Unable to pack application. %s' % e, 503
+
+def pack_nodejs_app(info,clone_path):
+    try:
+        download_nodejs_depends(info,clone_path)
+    except sh.ErrorReturnCode as e:
+        return "Unable to install dependencies %s"%e, 503
+    with open(clone_path + '/.gitattributes', 'w') as f:
+        f.write('info.yaml export-ignore')
+    
+    if not os.path.exists(clone_path + "/package.json"):
+        return "package.json required",400
+    
+    try:
+        package = json.load(file(clone_path+"/package.json"))
+        validate_nodejs_package(package)
+    except (ValueError,KeyError) as e:
+        return "error reading package.json: %s"%e, 400
+
+    expr = package["engines"]["node"]
+    ver = get_node_version_match(expr)
+    env = current_app.config["ver"]
+    try:
+        download_nodejs_depends(cloned_path,env)
+    except sh.ErrorReturnCode as e:
+        return "Unable to install dependencies", 400
+    
+    try:
+        logger.debug("Packing application to tar.gz")
+        sh.git("archive", ref, "--worktree-attributes", format="tar", o="app.tar", _cwd=clone_path),
+        sh.tar("-uf", "app.tar", "node_modules", _cwd=clone_path)
+        sh.gzip("app.tar", _cwd=clone_path)
+        package_files = sh.tar('-tf', 'app.tar.gz', _cwd=clone_path)
+        package_info['structure'] = [f.strip() for f in package_files]
+        package_info['slave'] = env.worker
+    except sh.ErrorReturnCode as e:
+        return 'Unable to pack application. %s' % e, 503
 
 
 def upload_repo(token):
@@ -302,30 +379,13 @@ def upload_repo(token):
             return str(e), 400
 
         try:
-            if package_info["type"] == "nodejs":
-                depends_path = download_depends({}, package_info['type'], clone_path)
-            else:
-                depends_path = download_depends(package_info['depends'], package_info['type'], clone_path)
-        except sh.ErrorReturnCode as e:
-            return 'Unable to install dependencies. %s' % e, 503
-
-        # remove info.yaml from tar.gz
-        with open(clone_path + '/.gitattributes', 'w') as f:
-            f.write('info.yaml export-ignore')
-
-        try:
-            logger.debug("Packing application to tar.gz")
-            sh.git("archive", ref, "--worktree-attributes", format="tar", o="app.tar", _cwd=clone_path),
-            if package_info["type"] == "nodejs":
-                sh.tar("-uf", "app.tar", "node_modules", _cwd=clone_path)
-            elif package_info["type"] == "python":
-                sh.tar("-uf", "app.tar", "-C", clone_path + "/depends", *depends_path, _cwd=clone_path)
-            sh.gzip("app.tar", _cwd=clone_path)
-            package_files = sh.tar('-tf', 'app.tar.gz', _cwd=clone_path)
-            package_info['structure'] = [f.strip() for f in package_files]
-        except sh.ErrorReturnCode as e:
-            return 'Unable to pack application. %s' % e, 503
-
+            if package_info["type"] == "python":
+                pack_python_app(package_info, clone_path)
+            elif package_info["type"] == "nodejs":
+                pack_nodejs_app(package_info, clone_path)
+        except Exception as e:
+            return "Unable to pack application. %s"%e, 503
+            
         try:
             for line in sh.git("log", "-5", date="short", format="%h %ad %s [%an]", _cwd=clone_path):
                 line = line.strip()
@@ -337,10 +397,9 @@ def upload_repo(token):
                 line = line.strip("\x1b>")
                 if not line:
                     continue
-                package_info.setdefault('changelog', []).append(line)
+                package_info.setdefault('changelog', []).append(line.decode("utf-8"))
         except sh.ErrorReturnCode as e:
             return 'Unable to pack application. %s' % e, 503
-
 
         try:
             with open(clone_path + "/app.tar.gz") as app:

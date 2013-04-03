@@ -19,6 +19,8 @@ def test_mapping(value):
 
 
 def create_app(settings_path='/etc/cocaine-flow/settings.yaml'):
+    reload(sys)
+    sys.setdefaultencoding("utf-8")
     app = Flask(__name__)
     with open(settings_path) as f:
         app.config.update(**yaml.load(f))
