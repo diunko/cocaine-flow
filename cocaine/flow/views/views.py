@@ -233,8 +233,6 @@ def upload_app(app, info, ref, token):
 
     return info['uuid']
 
-def match_nodejs_version(expr,ver):
-    return "0.8.21"
 
 def download_depends(depends, type_, path):
     logger.debug('Downloading dependencies for %s', path)
@@ -257,6 +255,9 @@ def download_nodejs_depends(path, env):
     npm = sh.Command(env.npm)
     npm("install","--production",_cwd=path)
     return os.listdir(install_path)
+
+def get_nodejs_version_match(expr):
+    return "0.8.21"
 
 def get_nodejs_env(version):
     prefix = current_app.config["NODEJS_PREFIX"]
@@ -293,26 +294,29 @@ def pack_nodejs_app(info,clone_path):
     try:
         download_nodejs_depends(info,clone_path)
     except sh.ErrorReturnCode as e:
-        return "Unable to install dependencies %s"%e, 503
+        return False, "Unable to install dependencies %s"%e, 503
     with open(clone_path + '/.gitattributes', 'w') as f:
         f.write('info.yaml export-ignore')
     
     if not os.path.exists(clone_path + "/package.json"):
-        return "package.json required",400
+        return False,"package.json required",400
     
     try:
         package = json.load(file(clone_path+"/package.json"))
         validate_nodejs_package(package)
     except (ValueError,KeyError) as e:
-        return "error reading package.json: %s"%e, 400
+        return False,"error reading package.json: %s"%e, 400
 
-    expr = package["engines"]["node"]
-    ver = get_node_version_match(expr)
-    env = current_app.config["ver"]
+    if "nodejs_version" in info:
+        ver = info["nodejs_version"]
+    else:
+        expr = package["engines"]["node"]
+        ver = get_nodejs_version_match(expr)
+    env = get_nodejs_env(ver)
     try:
         download_nodejs_depends(cloned_path,env)
     except sh.ErrorReturnCode as e:
-        return "Unable to install dependencies", 400
+        return False,"Unable to install dependencies", 400
     
     try:
         logger.debug("Packing application to tar.gz")
@@ -323,7 +327,9 @@ def pack_nodejs_app(info,clone_path):
         package_info['structure'] = [f.strip() for f in package_files]
         package_info['slave'] = env.worker
     except sh.ErrorReturnCode as e:
-        return 'Unable to pack application. %s' % e, 503
+        return False, 'Unable to pack application. %s' % e, 503
+    
+    return True,None,None
 
 
 def upload_repo(token):
@@ -382,7 +388,9 @@ def upload_repo(token):
             if package_info["type"] == "python":
                 pack_python_app(package_info, clone_path)
             elif package_info["type"] == "nodejs":
-                pack_nodejs_app(package_info, clone_path)
+                ok,err,code = pack_nodejs_app(package_info, clone_path)
+                if not ok:
+                    return err,code
         except Exception as e:
             return "Unable to pack application. %s"%e, 503
             
